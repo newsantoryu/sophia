@@ -3,13 +3,15 @@
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 #include "StateEngine.h"
+#include "EventEngine.h"
 
 #define LED_PIN  14
 #define SDA_PIN  32
 #define SCL_PIN  33
 
 Adafruit_MPU6050 mpu;
-StateEngine stateEngine;
+StateEngine      stateEngine;
+EventEngine      eventEngine(stateEngine);
 
 void blink(int vezes, int tempo = 80) {
   for (int i = 0; i < vezes; i++) {
@@ -57,18 +59,14 @@ void loop() {
 
   stateEngine.update(intensidade);
 
-  if (stateEngine.mudou()) {
-    Serial.print("[STATE]  ");
-    Serial.println(stateEngine.getStateName());
+  if (eventEngine.process(intensidade)) {
+    String json = eventEngine.toJson();
+    Serial.print("[EVENT]  ");
+    Serial.println(json);
 
-    if (stateEngine.getState() == STATE_ALERT) blink(3, 60);
-    if (stateEngine.getState() == STATE_ACTIVE) blink(1, 60);
-    if (stateEngine.getState() == STATE_IDLE)   blink(2, 200);
-  }
-
-  if (intensidade > 2.5f) {
-    Serial.print("[EVENT]  MOVEMENT | intensidade: ");
-    Serial.println(intensidade, 2);
+    SophiaEvent ev = eventEngine.getLast();
+    if (ev.type == EVENT_ALERT_TRIGGERED) blink(3, 60);
+    if (ev.type == EVENT_STATE_CHANGED)   blink(1, 100);
   }
 
   delay(100);
