@@ -2,12 +2,14 @@
 #include <Wire.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
+#include "StateEngine.h"
 
 #define LED_PIN  14
 #define SDA_PIN  32
 #define SCL_PIN  33
 
 Adafruit_MPU6050 mpu;
+StateEngine stateEngine;
 
 void blink(int vezes, int tempo = 80) {
   for (int i = 0; i < vezes; i++) {
@@ -19,7 +21,6 @@ void blink(int vezes, int tempo = 80) {
 void setup() {
   Serial.begin(115200);
   delay(1000);
-
   pinMode(LED_PIN, OUTPUT);
 
   Serial.println("================================");
@@ -30,7 +31,7 @@ void setup() {
 
   Serial.print("[SENSOR] MPU6050... ");
   if (!mpu.begin()) {
-    Serial.println("ERRO: nao encontrado!");
+    Serial.println("ERRO!");
     while (true) { blink(3, 100); delay(500); }
   }
 
@@ -41,7 +42,6 @@ void setup() {
 
   Serial.println("[SOPHIA] Sistema nervoso ativo.");
   Serial.println("[STATE]  IDLE");
-
   blink(3, 100);
 }
 
@@ -49,16 +49,26 @@ void loop() {
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
 
-  float movimento = fabs(sqrt(
+  float intensidade = fabs(sqrt(
     a.acceleration.x * a.acceleration.x +
     a.acceleration.y * a.acceleration.y +
     a.acceleration.z * a.acceleration.z
   ) - 9.8f);
 
-  if (movimento > 2.5f) {
-    Serial.print("[EVENT]  MOVEMENT_DETECTED | intensidade: ");
-    Serial.println(movimento, 2);
-    blink(1, 60);
+  stateEngine.update(intensidade);
+
+  if (stateEngine.mudou()) {
+    Serial.print("[STATE]  ");
+    Serial.println(stateEngine.getStateName());
+
+    if (stateEngine.getState() == STATE_ALERT) blink(3, 60);
+    if (stateEngine.getState() == STATE_ACTIVE) blink(1, 60);
+    if (stateEngine.getState() == STATE_IDLE)   blink(2, 200);
+  }
+
+  if (intensidade > 2.5f) {
+    Serial.print("[EVENT]  MOVEMENT | intensidade: ");
+    Serial.println(intensidade, 2);
   }
 
   delay(100);
