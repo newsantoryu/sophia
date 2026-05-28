@@ -4,7 +4,6 @@ NetworkEngine::NetworkEngine(const char* ssid, const char* password, const char*
   : _ssid(ssid), _password(password), _broker(broker), _mqtt(_wifiClient) {}
 
 void NetworkEngine::begin() {
-  _connectWifi();
   _mqtt.setServer(_broker, 1883);
   _mqtt.setBufferSize(512);
   _connectMqtt();
@@ -12,11 +11,10 @@ void NetworkEngine::begin() {
 
 void NetworkEngine::loop() {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[NET] WiFi perdido, reconectando...");
-    _connectWifi();
+    Serial.println("[NET] WiFi perdido!");
+    ESP.restart();
   }
   if (!_mqtt.connected()) {
-    Serial.println("[NET] MQTT perdido, reconectando...");
     _connectMqtt();
   }
   _mqtt.loop();
@@ -31,23 +29,7 @@ bool NetworkEngine::connected() {
   return _mqtt.connected();
 }
 
-void NetworkEngine::_connectWifi() {
-  Serial.print("[NET] WiFi conectando");
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(_ssid, _password);
-  int tentativas = 0;
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-    if (++tentativas > 40) {
-      Serial.println("\n[NET] WiFi falhou, reiniciando...");
-      ESP.restart();
-    }
-  }
-  Serial.println();
-  Serial.print("[NET] WiFi OK | IP: ");
-  Serial.println(WiFi.localIP());
-}
+void NetworkEngine::_connectWifi() {}
 
 void NetworkEngine::_connectMqtt() {
   int tentativas = 0;
@@ -59,10 +41,7 @@ void NetworkEngine::_connectMqtt() {
       Serial.print(" falhou rc=");
       Serial.println(_mqtt.state());
       delay(2000);
-      if (++tentativas > 5) {
-        Serial.println("[NET] MQTT falhou, reiniciando...");
-        ESP.restart();
-      }
+      if (++tentativas > 5) ESP.restart();
     }
   }
 }
