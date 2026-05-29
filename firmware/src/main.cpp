@@ -7,6 +7,7 @@
 #include "EventEngine.h"
 #include "NetworkEngine.h"
 #include "DisplayEngine.h"
+#include "AudioEngine.h"
 
 #define SDA_PIN  32
 #define SCL_PIN  33
@@ -20,6 +21,9 @@ StateEngine      stateEngine;
 EventEngine      eventEngine(stateEngine);
 NetworkEngine    network(WIFI_SSID, WIFI_PASS, MQTT_BROKER);
 DisplayEngine    display;
+AudioEngine      audio;
+
+unsigned long ultimoLog = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -29,51 +33,39 @@ void setup() {
   Serial.println("  SOPHIA ∞ MVP — Boot v1.0.0  ");
   Serial.println("================================");
 
-  // 1. WIFI — exatamente como no head tracker
   Serial.println("[NET] Conectando WiFi...");
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-
   int tentativas = 0;
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
-    if (++tentativas > 40) {
-      Serial.println("\n[NET] Falha no WiFi!");
-      ESP.restart();
-    }
+    if (++tentativas > 40) { ESP.restart(); }
   }
   Serial.println();
   Serial.print("[NET] WiFi OK | IP: ");
   Serial.println(WiFi.localIP());
-
-  // 2. MQTT
-  Serial.println("[NET] MQTT...");
   network.begin();
 
-  // 3. DISPLAY
   Wire.begin(21, 22);
   Serial.print("[DISPLAY] OLED... ");
-  if (!display.begin()) {
-    Serial.println("ERRO!");
-  } else {
-    Serial.println("OK");
-    display.showIP(WiFi.localIP().toString().c_str());
-    delay(1500);
-  }
+  display.begin() ? Serial.println("OK") : Serial.println("ERRO!");
+  display.showIP(WiFi.localIP().toString().c_str());
+  delay(1500);
 
-  // 4. SENSOR
   Wire1.begin(SDA_PIN, SCL_PIN);
   Serial.print("[SENSOR] MPU6050... ");
   if (!mpu.begin(0x68, &Wire1)) {
     Serial.println("ERRO!");
-    display.showError("MPU6050 falhou!");
     while (true) { delay(500); }
   }
   mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
   mpu.setGyroRange(MPU6050_RANGE_500_DEG);
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
   Serial.println("OK");
+
+  Serial.print("[AUDIO] INMP441... ");
+  audio.begin() ? Serial.println("OK") : Serial.println("ERRO!");
 
   Serial.println("================================");
   Serial.println("[SOPHIA] Sistema nervoso ativo!");
@@ -83,24 +75,45 @@ void setup() {
 }
 
 void loop() {
+  // audio primeiro — igual ao tuner
+  audio.read();
+
+  float audioIntensidade = audio.getIntensidade();
+  bool  audioAtivo       = audio.isAtivo();
+
   network.loop();
 
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
-
-  float intensidade = fabs(sqrt(
+  float movIntensidade = fabs(sqrt(
     a.acceleration.x * a.acceleration.x +
     a.acceleration.y * a.acceleration.y +
     a.acceleration.z * a.acceleration.z
   ) - 9.8f);
 
+  float intensidade = max(movIntensidade, audioIntensidade * 10.0f);
+
   stateEngine.update(intensidade);
+
+  unsigned long agora = millis();
+  if (agora - ultimoLog > 500) {
+    Serial.print("[AUDIO]  ativo: ");
+    Serial.print(audioAtivo ? "SIM" : "NAO");
+    Serial.print(" | int: ");
+    Serial.print(audioIntensidade, 2);
+    Serial.print(" | mov: ");
+    Serial.println(movIntensidade, 2);
+    ultimoLog = agora;
+
+    if (audioAtivo) {
+      network.publish("sophia/audio", String(audioIntensidade));
+    }
+  }
 
   if (eventEngine.process(intensidade)) {
     String json = eventEngine.toJson();
     Serial.print("[EVENT]  ");
     Serial.println(json);
-
     network.publish("sophia/events", json);
 
     SophiaEvent ev = eventEngine.getLast();
@@ -112,6 +125,4 @@ void loop() {
       display.showState(stateEngine.getStateName(), ev.severity);
     }
   }
-
-  delay(100);
 }
