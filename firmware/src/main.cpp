@@ -8,6 +8,7 @@
 #include "NetworkEngine.h"
 #include "DisplayEngine.h"
 #include "AudioEngine.h"
+#include "TelemetryEngine.h"
 
 #define SDA_PIN  32
 #define SCL_PIN  33
@@ -22,8 +23,10 @@ EventEngine      eventEngine(stateEngine);
 NetworkEngine    network(WIFI_SSID, WIFI_PASS, MQTT_BROKER);
 DisplayEngine    display;
 AudioEngine      audio;
+TelemetryEngine  telemetry;
 
-unsigned long ultimoLog = 0;
+unsigned long ultimoLogAudio = 0;
+unsigned long ultimoTelemetry = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -67,6 +70,8 @@ void setup() {
   Serial.print("[AUDIO] INMP441... ");
   audio.begin() ? Serial.println("OK") : Serial.println("ERRO!");
 
+  telemetry.begin();
+
   Serial.println("================================");
   Serial.println("[SOPHIA] Sistema nervoso ativo!");
   Serial.println("[STATE]  IDLE");
@@ -75,9 +80,7 @@ void setup() {
 }
 
 void loop() {
-  // audio primeiro — igual ao tuner
   audio.read();
-
   float audioIntensidade = audio.getIntensidade();
   bool  audioAtivo       = audio.isAtivo();
 
@@ -92,25 +95,30 @@ void loop() {
   ) - 9.8f);
 
   float intensidade = max(movIntensidade, audioIntensidade * 10.0f);
-
   stateEngine.update(intensidade);
 
+  // log audio
   unsigned long agora = millis();
-  if (agora - ultimoLog > 500) {
+  if (agora - ultimoLogAudio > 500) {
     Serial.print("[AUDIO]  ativo: ");
     Serial.print(audioAtivo ? "SIM" : "NAO");
     Serial.print(" | int: ");
     Serial.print(audioIntensidade, 2);
     Serial.print(" | mov: ");
     Serial.println(movIntensidade, 2);
-    ultimoLog = agora;
-
-    if (audioAtivo) {
-      network.publish("sophia/audio", String(audioIntensidade));
-    }
+    ultimoLogAudio = agora;
   }
 
-  if (eventEngine.process(intensidade)) {
+  // telemetria a cada 10s
+  if (agora - ultimoTelemetry > 10000) {
+    String tJson = telemetry.toJson();
+    Serial.print("[TELEMETRY] ");
+    Serial.println(tJson);
+    network.publish("sophia/telemetry", tJson);
+    ultimoTelemetry = agora;
+  }
+
+  if (eventEngine.process(movIntensidade, audioIntensidade, audioAtivo)) {
     String json = eventEngine.toJson();
     Serial.print("[EVENT]  ");
     Serial.println(json);
