@@ -19,6 +19,8 @@ TIMEOUT_S      = 3.0
 RECONNECT_S    = 5.0
 WATCHDOG_S     = 30.0   # reinicia se não receber nada por 30s
 
+SEV_MIN_DISPLAY = 0.25  # GENTLE abaixo disso não aparece no terminal
+
 
 class SerialReader:
     def __init__(
@@ -128,11 +130,16 @@ class SerialReader:
         if parsed.type == LineType.EVENT:
             self.stats["events"] += 1
             insert_event(parsed.data, parsed.raw)
+            
             if self.verbose:
+                event = parsed.data.get("event", "")
                 sev = parsed.data.get("severity", 0)
-                print(
-                    f"  [EVT] {parsed.data.get('event','?'):20s} "
-                    f"sev={sev:.3f}  state={parsed.data.get('state','?')}"
+
+                # Suprime GENTLE de baixa severidade — ruído de fundo
+                if not (event == "MOVEMENT_GENTLE" and sev < SEV_MIN_DISPLAY):
+                    print(
+                         f"  [EVT] {parsed.data.get('event','?'):20s} "
+                         f"sev={sev:.3f}  state={parsed.data.get('state','?')}"
                 )
             if self.on_event:
                 self.on_event(parsed)
