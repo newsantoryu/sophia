@@ -245,3 +245,6 @@ def snapshot_to_prompt(snap: SessionSnapshot) -> str:
 ## Avaliação
 - Padrão: {snap.padrao} | Nível: {snap.nivel_geral} | Tendência: {snap.tendencia}
 """
+
+
+
