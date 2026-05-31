@@ -141,6 +141,15 @@ void setup() {
 
   Serial.print("[AUDIO]  INMP441... ");
   audio.begin() ? Serial.println("OK") : Serial.println("ERRO!");
+  Serial.print("[AUDIO]  Calibrando noise floor");
+while (!audio.isCalibrado()) {
+  audio.read();
+  Serial.print(".");
+  delay(50);
+}
+Serial.println();
+Serial.print("[AUDIO]  Noise floor: ");
+Serial.println(audio.getNoiseFloor(), 1);
 
   telemetry.begin();
 

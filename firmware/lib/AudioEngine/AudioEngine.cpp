@@ -22,9 +22,13 @@ bool AudioEngine::begin() {
   if (i2s_set_pin(I2S_PORT, &pins) != ESP_OK) return false;
 
   _envelope    = 0;
-  _dynamicMax  = 100;
+  _noiseFloor  = 0;
+  _dynamicMax  = 500;   // FIX: começa maior para não comprimir no início
   _intensidade = 0;
   _ativo       = false;
+  _calibrado   = false;
+  _calAmostras = 0;
+  _calSoma     = 0;
 
   return true;
 }
@@ -42,14 +46,41 @@ void AudioEngine::read() {
   }
 
   float amp = (float)sum / samples;
-  _envelope += 0.1f * (amp - _envelope);
 
+  // ── Calibração automática do noise floor nas primeiras 50 amostras ─────
+  if (!_calibrado) {
+    _calSoma += amp;
+    _calAmostras++;
+    if (_calAmostras >= 50) {
+      _noiseFloor = (_calSoma / _calAmostras) * 1.3f;  // 30% acima do ruído
+      _calibrado  = true;
+    }
+    _intensidade = 0;
+    _ativo = false;
+    return;
+  }
+
+  // Remove noise floor antes de calcular
+  float ampLimpa = amp - _noiseFloor;
+  if (ampLimpa < 0) ampLimpa = 0;
+
+  // Envelope suavizado sobre amplitude limpa
+  _envelope += 0.1f * (ampLimpa - _envelope);
+
+  // FIX: dynamicMax decai mais rápido (0.995 em vez de 0.999)
+  // evita que um pico alto comprima tudo por muito tempo
   if (_envelope > _dynamicMax) _dynamicMax = _envelope;
-  _dynamicMax *= 0.999f;
+  _dynamicMax *= 0.995f;
+  if (_dynamicMax < 50) _dynamicMax = 50;  // mínimo para evitar div por zero
 
-  float norm = (_dynamicMax > 0) ? _envelope / _dynamicMax : 0;
+  float norm = _envelope / _dynamicMax;
+  if (norm > 1.0f) norm = 1.0f;
+
   _intensidade = norm;
-  _ativo = norm > 0.3f;
+
+  // FIX: threshold mais alto (0.5 em vez de 0.3)
+  // só marca ativo quando claramente acima do ruído calibrado
+  _ativo = norm > 0.5f;
 }
 
 float AudioEngine::getIntensidade() { return _intensidade; }

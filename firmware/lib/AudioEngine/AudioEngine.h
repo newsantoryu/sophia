@@ -14,11 +14,19 @@ public:
   void  read();
   float getIntensidade();
   bool  isAtivo();
+  float getNoiseFloor() { return _noiseFloor; }
+  bool  isCalibrado()   { return _calibrado; }
 
 private:
   int32_t _buffer[AUDIO_BUFFER_LEN];
   float   _envelope;
   float   _dynamicMax;
+  float   _noiseFloor;    // ruído de fundo calibrado no boot
   float   _intensidade;
   bool    _ativo;
+
+  // Calibração automática
+  bool    _calibrado;
+  int     _calAmostras;
+  float   _calSoma;
 };
