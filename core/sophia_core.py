@@ -22,6 +22,7 @@ from sophia.database    import init_db, query_recent_events, query_state_summary
 from sophia.serial_reader import SerialReader, list_ports
 from sophia.observer    import ObserverEngine, snapshot_to_prompt
 from sophia.qwen_bridge import QwenBridge
+from sophia.sessions import init_sessions_db
 from sophia.parser      import ParsedLine
 
 
@@ -40,13 +41,14 @@ class CognitiveCycle:
     A cada N segundos: Observer analisa → Qwen interpreta → loga insight.
     """
 
-    def __init__(self, intervalo_s: int = 60, usar_qwen: bool = True):
+    def __init__(self, intervalo_s: int = 60, usar_qwen: bool = True, reader=None):
         self.intervalo  = intervalo_s
         self.observer   = ObserverEngine(janela_minutos=5)
         self.bridge     = QwenBridge() if usar_qwen else None
         self._running   = False
         self._thread    = None
         self.last_insight = None
+        self._reader    = reader
 
     def start(self):
         self._running = True
@@ -72,7 +74,8 @@ class CognitiveCycle:
 
     def _cycle(self):
         print("\n[COG] ── Iniciando ciclo cognitivo ──────────────────")
-        snap = self.observer.observe()
+        sid  = self._reader.session.session_id if self._reader else None
+        snap = self.observer.observe(session_id=sid)
 
         print(f"[COG] Observer: {snap.total_eventos} eventos | "
               f"nível={snap.nivel_geral} | padrão={snap.padrao}")
@@ -141,6 +144,7 @@ def main():
 
     print(BANNER)
     init_db()
+    init_sessions_db()
 
     if args.list:
         for p in list_ports(): print(f"  {p}")
@@ -184,7 +188,6 @@ def main():
             print("[QWEN] Ollama offline — rodando sem IA (use --no-qwen para silenciar)")
             usar_qwen = False
 
-    cognitive = CognitiveCycle(intervalo_s=args.ciclo, usar_qwen=usar_qwen)
     reader    = SerialReader(
         port=port,
         on_event=on_alert,
@@ -198,6 +201,8 @@ def main():
         reader.stop()
         print(f"[SOPHIA] Stats: {reader.stats}")
         sys.exit(0)
+
+    cognitive = CognitiveCycle(intervalo_s=args.ciclo, usar_qwen=usar_qwen, reader=reader)
 
     signal.signal(signal.SIGINT,  shutdown)
     signal.signal(signal.SIGTERM, shutdown)

@@ -131,3 +131,79 @@ def query_state_summary() -> dict:
     """).fetchall()
     conn.close()
     return {r["state"]: r["total"] for r in rows}
+
+
+# ── Funções v2 com session_id ─────────────────────────────────────────────
+
+def insert_event_v2(session_id: int, data: dict, raw: str):
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO events_v2
+        (session_id, received, event, severity, state, timestamp, audio, mov, piezo, raw)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        session_id,
+        datetime.now().isoformat(),
+        data.get("event", "UNKNOWN"),
+        data.get("severity"),
+        data.get("state"),
+        data.get("timestamp"),
+        data.get("audio"),
+        data.get("mov"),
+        data.get("piezo"),
+        raw,
+    ))
+    conn.commit()
+    conn.close()
+
+
+def insert_telemetry_v2(session_id: int, data: dict, raw: str):
+    conn = get_conn()
+    conn.execute("""
+        INSERT INTO telemetry_v2
+        (session_id, received, uptime, heap, rssi, ip, raw)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        session_id,
+        datetime.now().isoformat(),
+        data.get("uptime"),
+        data.get("heap"),
+        data.get("rssi"),
+        data.get("ip"),
+        raw,
+    ))
+    conn.commit()
+    conn.close()
+
+
+def query_events_by_session(session_id: int, limit: int = 50) -> list:
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT * FROM events_v2
+        WHERE session_id = ?
+        ORDER BY id DESC LIMIT ?
+    """, (session_id, limit)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def query_recent_events_v2(session_id: int = None, limit: int = 20,
+                            since: str = None) -> list:
+    conn = get_conn()
+    if session_id and since:
+        rows = conn.execute("""
+            SELECT * FROM events_v2
+            WHERE session_id = ? AND received >= ?
+            ORDER BY id DESC LIMIT ?
+        """, (session_id, since, limit)).fetchall()
+    elif session_id:
+        rows = conn.execute("""
+            SELECT * FROM events_v2 WHERE session_id = ?
+            ORDER BY id DESC LIMIT ?
+        """, (session_id, limit)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM events_v2 ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

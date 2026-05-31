@@ -1,9 +1,12 @@
 """
-SOPHIA ∞ — Observer Engine v0.2
-Correções:
-- Filtra eventos por relevância (ignora MOVEMENT_GENTLE de baixa severidade)
-- Limita janela a eventos significativos para não explodir o prompt
-- Peso diferenciado por tipo de evento
+SOPHIA ∞ — Observer Engine v0
+Analisa padrões do banco e gera contexto estruturado.
+
+Responsabilidades:
+- Resumir sessão atual (últimos N minutos)
+- Calcular métricas de agitação, foco, estabilidade
+- Detectar padrões: escalada, acalmia, ciclo, pico isolado
+- Gerar snapshot semântico para o Qwen
 """
 
 from dataclasses import dataclass, field
@@ -12,101 +15,121 @@ from typing import Optional
 from .database import get_conn
 
 
+# ── Snapshot — saída do Observer ─────────────────────────────────────────
+
 @dataclass
 class SessionSnapshot:
+    # Janela analisada
     janela_minutos: int
     total_eventos:  int
-    total_raw:      int   # todos os eventos, incluindo os filtrados
     inicio:         str
     fim:            str
 
-    tempo_idle:     float = 0.0
+    # Distribuição de estados
+    tempo_idle:     float = 0.0   # % do tempo
     tempo_active:   float = 0.0
     tempo_alert:    float = 0.0
     tempo_recovery: float = 0.0
 
+    # Métricas de intensidade
     severidade_media:  float = 0.0
     severidade_max:    float = 0.0
     picos_movimento:   int   = 0
     alertas_totais:    int   = 0
     impactos_totais:   int   = 0
 
-    padrao:      str = "ESTAVEL"
-    nivel_geral: str = "BAIXO"
-    tendencia:   str = "NEUTRA"
+    # Padrão detectado
+    padrao:      str = "ESTAVEL"     # ESCALADA | ACALMIA | CICLICO | PICO | ESTAVEL
+    nivel_geral: str = "BAIXO"       # BAIXO | MODERADO | ALTO | CRITICO
+    tendencia:   str = "NEUTRA"      # SUBINDO | DESCENDO | NEUTRA
 
-    resumo:   str = ""
-    sugestao: str = ""
+    # Contexto semântico para o Qwen
+    resumo:    str = ""
+    sugestao:  str = ""
+
+    # Histórico de transições
     transicoes: list = field(default_factory=list)
 
 
-# Peso por tipo — GENTLE de baixa sev não conta para métricas de agitação
-PESO_EVENTO = {
-    "ALERT_TRIGGERED": 3.0,
-    "STATE_CHANGED":   2.0,
-    "MOVEMENT_SPIKE":  1.5,
-    "IMPACT_STRONG":   2.5,
-    "IMPACT":          1.5,
-    "MOVEMENT_GENTLE": 0.3,
-    "AUDIO_ACTIVE":    0.5,
-}
-
-# Threshold mínimo de severidade para incluir no cálculo
-SEV_MIN_GENTLE = 0.20   # GENTLE abaixo disso é ruído de fundo
-
+# ── Observer Engine ───────────────────────────────────────────────────────
 
 class ObserverEngine:
 
     def __init__(self, janela_minutos: int = 5):
         self.janela_minutos = janela_minutos
 
-    def observe(self) -> SessionSnapshot:
+    # ── API pública ───────────────────────────────────────────────────────
+
+    def observe(self, session_id: int = None) -> SessionSnapshot:
+        """Gera snapshot da sessão atual."""
         conn = get_conn()
         since = (datetime.now() - timedelta(minutes=self.janela_minutos)).isoformat()
-        todos    = self._fetch_events(conn, since)
+
+        eventos   = self._fetch_events(conn, since)
         telemetry = self._fetch_last_telemetry(conn)
         conn.close()
 
-        if not todos:
+        if not eventos:
             return self._snapshot_vazio()
 
-        # Filtra eventos relevantes
-        relevantes = self._filtrar(todos)
-        snap = self._analisar(relevantes, len(todos))
+        snap = self._analisar(eventos)
         snap = self._gerar_semantico(snap, telemetry)
         return snap
 
-    def _filtrar(self, eventos: list) -> list:
-        """Remove ruído — GENTLE de baixa severidade."""
-        resultado = []
-        for e in eventos:
-            tipo, sev = e[0], e[1] or 0
-            if tipo == "MOVEMENT_GENTLE" and sev < SEV_MIN_GENTLE:
-                continue   # ruído de fundo, descarta
-            resultado.append(e)
-        return resultado
+    def observe_trend(self, janelas: int = 3) -> list[SessionSnapshot]:
+        """Compara N janelas consecutivas para detectar tendência macro."""
+        snapshots = []
+        for i in range(janelas, 0, -1):
+            conn = get_conn()
+            fim   = datetime.now() - timedelta(minutes=(i-1) * self.janela_minutos)
+            inicio = fim - timedelta(minutes=self.janela_minutos)
+            eventos = self._fetch_events_range(conn, inicio.isoformat(), fim.isoformat())
+            conn.close()
+            if eventos:
+                snap = self._analisar(eventos)
+                snapshots.append(snap)
+        return snapshots
 
-    def _fetch_events(self, conn, since: str) -> list:
+    # ── Fetch ─────────────────────────────────────────────────────────────
+
+    def _fetch_events(self, conn, since: str, session_id: int = None) -> list:
+        if session_id:
+            return conn.execute("""
+                SELECT event, severity, state, received, timestamp, audio, mov, piezo
+                FROM events_v2
+                WHERE received >= ? AND session_id = ?
+                ORDER BY received ASC
+            """, (since, session_id)).fetchall()
         return conn.execute("""
             SELECT event, severity, state, received, timestamp, audio, mov, piezo
-            FROM events WHERE received >= ?
+            FROM events
+            WHERE received >= ?
             ORDER BY received ASC
         """, (since,)).fetchall()
 
+    def _fetch_events_range(self, conn, inicio: str, fim: str) -> list:
+        return conn.execute("""
+            SELECT event, severity, state, received, timestamp, audio, mov, piezo
+            FROM events
+            WHERE received >= ? AND received <= ?
+            ORDER BY received ASC
+        """, (inicio, fim)).fetchall()
+
     def _fetch_last_telemetry(self, conn) -> Optional[dict]:
-        row = conn.execute(
-            "SELECT uptime, heap, rssi FROM telemetry ORDER BY id DESC LIMIT 1"
-        ).fetchone()
+        row = conn.execute("""
+            SELECT uptime, heap, rssi FROM telemetry
+            ORDER BY id DESC LIMIT 1
+        """).fetchone()
         return dict(row) if row else None
 
-    def _analisar(self, eventos: list, total_raw: int) -> SessionSnapshot:
-        total  = len(eventos)
-        if total == 0:
-            return self._snapshot_vazio(total_raw)
+    # ── Análise ───────────────────────────────────────────────────────────
 
+    def _analisar(self, eventos: list) -> SessionSnapshot:
+        total = len(eventos)
         severidades = [e[1] for e in eventos if e[1] is not None]
         states      = [e[2] for e in eventos if e[2]]
 
+        # Contagens por tipo
         contagem = {}
         for e in eventos:
             contagem[e[0]] = contagem.get(e[0], 0) + 1
@@ -115,45 +138,49 @@ class ObserverEngine:
         alertas  = contagem.get("ALERT_TRIGGERED", 0)
         impactos = contagem.get("IMPACT", 0) + contagem.get("IMPACT_STRONG", 0)
 
+        # Distribuição de estados (% por contagem)
         total_state = len(states) or 1
-        dist = {s: states.count(s) / total_state
-                for s in ["IDLE", "ACTIVE", "ALERT", "RECOVERY"]}
+        dist = {s: states.count(s) / total_state for s in
+                ["IDLE", "ACTIVE", "ALERT", "RECOVERY"]}
 
+        # Severidade
         sev_media = sum(severidades) / len(severidades) if severidades else 0
         sev_max   = max(severidades) if severidades else 0
 
+        # Transições de estado
         transicoes = [
             {"estado": e[2], "severity": e[1], "quando": e[3]}
             for e in eventos if e[0] == "STATE_CHANGED"
         ]
 
-        # Tendência — só sobre eventos com peso
-        sevs_pesadas = [
-            e[1] * PESO_EVENTO.get(e[0], 1.0)
-            for e in eventos if e[1] is not None
-        ]
-        meio = len(sevs_pesadas) // 2
+        # Tendência — compara primeira e segunda metade
+        meio = len(severidades) // 2
         if meio > 0:
-            mi = sum(sevs_pesadas[:meio]) / meio
-            mf = sum(sevs_pesadas[meio:]) / (len(sevs_pesadas) - meio)
-            tendencia = "SUBINDO" if mf - mi > 0.1 else \
-                        "DESCENDO" if mi - mf > 0.1 else "NEUTRA"
+            media_ini = sum(severidades[:meio]) / meio
+            media_fim = sum(severidades[meio:]) / (len(severidades) - meio)
+            delta = media_fim - media_ini
+            tendencia = "SUBINDO" if delta > 0.05 else "DESCENDO" if delta < -0.05 else "NEUTRA"
         else:
             tendencia = "NEUTRA"
 
+        # Padrão
         padrao = self._detectar_padrao(severidades, alertas, picos, tendencia)
-        nivel  = self._calcular_nivel(sev_media, alertas, dist.get("ALERT", 0))
+
+        # Nível geral
+        nivel = self._calcular_nivel(sev_media, alertas, dist.get("ALERT", 0))
+
+        inicio = eventos[0][3] if eventos else datetime.now().isoformat()
+        fim    = eventos[-1][3] if eventos else datetime.now().isoformat()
 
         return SessionSnapshot(
-            janela_minutos   = self.janela_minutos,
-            total_eventos    = total,
-            total_raw        = total_raw,
-            inicio           = eventos[0][3],
-            fim              = eventos[-1][3],
-            tempo_idle       = dist.get("IDLE", 0),
-            tempo_active     = dist.get("ACTIVE", 0),
-            tempo_alert      = dist.get("ALERT", 0),
-            tempo_recovery   = dist.get("RECOVERY", 0),
+            janela_minutos = self.janela_minutos,
+            total_eventos  = total,
+            inicio         = inicio,
+            fim            = fim,
+            tempo_idle     = dist.get("IDLE", 0),
+            tempo_active   = dist.get("ACTIVE", 0),
+            tempo_alert    = dist.get("ALERT", 0),
+            tempo_recovery = dist.get("RECOVERY", 0),
             severidade_media = round(sev_media, 3),
             severidade_max   = round(sev_max, 3),
             picos_movimento  = picos,
@@ -165,86 +192,133 @@ class ObserverEngine:
             transicoes       = transicoes,
         )
 
-    def _detectar_padrao(self, sevs, alertas, picos, tendencia):
-        if not sevs: return "ESTAVEL"
-        if alertas >= 8: return "CRITICO"
-        if tendencia == "SUBINDO" and picos >= 3: return "ESCALADA"
-        if tendencia == "DESCENDO" and max(sevs) > 0.5: return "ACALMIA"
+    def _detectar_padrao(self, sevs: list, alertas: int,
+                          picos: int, tendencia: str) -> str:
+        if not sevs:
+            return "ESTAVEL"
+        if alertas >= 5:
+            return "CRITICO"
+        if tendencia == "SUBINDO" and picos >= 3:
+            return "ESCALADA"
+        if tendencia == "DESCENDO" and max(sevs) > 0.5:
+            return "ACALMIA"
+        # Detecta ciclo: alternância de alta e baixa
         if len(sevs) >= 6:
-            altas  = sum(1 for s in sevs if s > 0.3)
+            altas = sum(1 for s in sevs if s > 0.3)
             baixas = sum(1 for s in sevs if s < 0.2)
-            if altas > 2 and baixas > 2: return "CICLICO"
-        if max(sevs) > 0.6 and alertas <= 2: return "PICO"
+            if altas > 2 and baixas > 2:
+                return "CICLICO"
+        if max(sevs) > 0.6 and alertas <= 2:
+            return "PICO"
         return "ESTAVEL"
 
-    def _calcular_nivel(self, sev_media, alertas, pct_alert):
-        if sev_media > 0.5 or alertas > 10 or pct_alert > 0.5: return "CRITICO"
-        if sev_media > 0.35 or alertas > 5  or pct_alert > 0.3: return "ALTO"
-        if sev_media > 0.2  or alertas > 1  or pct_alert > 0.1: return "MODERADO"
+    def _calcular_nivel(self, sev_media: float,
+                         alertas: int, pct_alert: float) -> str:
+        if sev_media > 0.5 or alertas > 8 or pct_alert > 0.4:
+            return "CRITICO"
+        if sev_media > 0.35 or alertas > 4 or pct_alert > 0.2:
+            return "ALTO"
+        if sev_media > 0.2 or alertas > 1:
+            return "MODERADO"
         return "BAIXO"
 
-    def _gerar_semantico(self, snap, tel):
-        partes = [
+    # ── Semântico ─────────────────────────────────────────────────────────
+
+    def _gerar_semantico(self, snap: SessionSnapshot,
+                          tel: Optional[dict]) -> SessionSnapshot:
+        """Gera resumo e sugestão em linguagem natural."""
+
+        # Resumo
+        partes = []
+
+        partes.append(
             f"Nos últimos {snap.janela_minutos} minutos, "
-            f"{snap.total_eventos} eventos relevantes "
-            f"(de {snap.total_raw} totais) foram analisados."
-        ]
+            f"{snap.total_eventos} eventos foram registrados."
+        )
+
         if snap.tempo_alert > 0.3:
-            partes.append(f"Sistema em ALERTA por {snap.tempo_alert*100:.0f}% do tempo.")
+            partes.append(
+                f"O sistema passou {snap.tempo_alert*100:.0f}% do tempo em ALERTA."
+            )
         elif snap.tempo_active > 0.5:
-            partes.append("Atividade moderada a alta.")
+            partes.append("Ambiente com atividade moderada a alta.")
         else:
             partes.append("Ambiente predominantemente calmo.")
-        if snap.picos_movimento > 3:
-            partes.append(f"{snap.picos_movimento} picos de movimento.")
+
+        if snap.picos_movimento > 5:
+            partes.append(
+                f"{snap.picos_movimento} picos de movimento detectados."
+            )
         if snap.alertas_totais > 0:
             partes.append(
-                f"{snap.alertas_totais} alertas (max sev={snap.severidade_max:.2f})."
+                f"{snap.alertas_totais} alertas disparados "
+                f"(intensidade máxima: {snap.severidade_max:.2f})."
             )
         if snap.impactos_totais > 0:
-            partes.append(f"{snap.impactos_totais} impactos físicos.")
+            partes.append(f"{snap.impactos_totais} impactos físicos via piezo.")
         if snap.tendencia != "NEUTRA":
-            partes.append(f"Tendência {snap.tendencia.lower()}.")
+            partes.append(
+                f"Tendência {snap.tendencia.lower()} na intensidade."
+            )
         if tel:
-            partes.append(f"Uptime={tel.get('uptime')}s heap={tel.get('heap')}.")
+            partes.append(
+                f"Sistema: uptime={tel.get('uptime')}s, "
+                f"heap={tel.get('heap')} bytes livres."
+            )
+
         snap.resumo = " ".join(partes)
 
-        snap.sugestao = {
-            "CRITICO":  "Agitação crítica. Considere pausar atividades.",
-            "ALTO":     "Atividade elevada. Atenção ao ambiente.",
-            "MODERADO": "Atividade moderada. Sistema normal.",
-            "BAIXO":    "Ambiente calmo. Sistema estável.",
-        }.get(snap.nivel_geral, "")
+        # Sugestão
+        sugestoes = {
+            "CRITICO":  "Ambiente com agitação crítica. Considere pausar atividades.",
+            "ALTO":     "Nível de atividade elevado. Atenção ao contexto ao redor.",
+            "MODERADO": "Atividade moderada. Sistema operando normalmente.",
+            "BAIXO":    "Ambiente calmo. Sistema em estado estável.",
+        }
+        snap.sugestao = sugestoes.get(snap.nivel_geral, "")
+
         return snap
 
-    def _snapshot_vazio(self, total_raw: int = 0) -> SessionSnapshot:
+    def _snapshot_vazio(self) -> SessionSnapshot:
         return SessionSnapshot(
-            janela_minutos=self.janela_minutos, total_eventos=0,
-            total_raw=total_raw,
-            inicio=datetime.now().isoformat(), fim=datetime.now().isoformat(),
-            padrao="ESTAVEL", nivel_geral="BAIXO", tendencia="NEUTRA",
-            resumo="Nenhum evento relevante na janela atual.",
-            sugestao="Sistema aguardando percepção.",
+            janela_minutos = self.janela_minutos,
+            total_eventos  = 0,
+            inicio         = datetime.now().isoformat(),
+            fim            = datetime.now().isoformat(),
+            padrao         = "ESTAVEL",
+            nivel_geral    = "BAIXO",
+            tendencia      = "NEUTRA",
+            resumo         = "Nenhum evento registrado na janela atual.",
+            sugestao       = "Sistema aguardando percepção.",
         )
 
 
+# ── Formatador para o Qwen ────────────────────────────────────────────────
+
 def snapshot_to_prompt(snap: SessionSnapshot) -> str:
-    return f"""# SOPHIA ∞ — Contexto da Sessão
+    """Formata o snapshot como contexto estruturado para o Qwen."""
+    return f"""# Contexto SOPHIA ∞ — Sessão Atual
 
 ## Resumo
 {snap.resumo}
 
-## Métricas (janela: {snap.janela_minutos} min)
-- Eventos relevantes: {snap.total_eventos} (total bruto: {snap.total_raw})
-- Severidade: média={snap.severidade_media:.3f} máx={snap.severidade_max:.3f}
-- Picos movimento: {snap.picos_movimento} | Alertas: {snap.alertas_totais} | Impactos: {snap.impactos_totais}
+## Métricas
+- Janela: últimos {snap.janela_minutos} minutos
+- Total de eventos: {snap.total_eventos}
+- Severidade média: {snap.severidade_media:.3f} | máxima: {snap.severidade_max:.3f}
+- Picos de movimento: {snap.picos_movimento}
+- Alertas: {snap.alertas_totais}
+- Impactos físicos: {snap.impactos_totais}
 
-## Estados
-- IDLE {snap.tempo_idle*100:.0f}% | ACTIVE {snap.tempo_active*100:.0f}% | ALERT {snap.tempo_alert*100:.0f}% | RECOVERY {snap.tempo_recovery*100:.0f}%
+## Distribuição de Estados
+- IDLE:     {snap.tempo_idle*100:.0f}%
+- ACTIVE:   {snap.tempo_active*100:.0f}%
+- ALERT:    {snap.tempo_alert*100:.0f}%
+- RECOVERY: {snap.tempo_recovery*100:.0f}%
 
 ## Avaliação
-- Padrão: {snap.padrao} | Nível: {snap.nivel_geral} | Tendência: {snap.tendencia}
+- Padrão detectado: {snap.padrao}
+- Nível geral: {snap.nivel_geral}
+- Tendência: {snap.tendencia}
+- Sugestão: {snap.sugestao}
 """
-
-
-
