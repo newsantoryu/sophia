@@ -96,6 +96,10 @@ class CognitiveCycle:
             print(f"  ║ Sugestão: {insight.sugestao}")
             print(f"  ║ OLED    : [{insight.oled_msg}]")
             print(f"  ╚══════════════════════════════════════════════╝\n")
+
+            # Fecha o ciclo — envia insight ao OLED do ESP32
+            if self._reader:
+                self._reader.send_insight(insight)
         else:
             print(f"[COG] {snap.resumo}")
             print(f"[COG] Sugestão: {snap.sugestao}")

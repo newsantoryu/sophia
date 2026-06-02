@@ -44,7 +44,8 @@ void DisplayEngine::showState(const char* state, float severity) {
   _display.setCursor(0, 42);
   _display.print("Intensidade: ");
   _display.print(severity, 2);
-  int barW = (int)(severity * 128);
+  float sev = severity < 0.0f ? 0.0f : (severity > 1.0f ? 1.0f : severity);
+  int barW = (int)(sev * OLED_WIDTH);
   _display.fillRect(0, 56, barW, 6, SSD1306_WHITE);
   _display.display();
 }
@@ -77,5 +78,24 @@ void DisplayEngine::showError(const char* msg) {
   _display.setTextSize(1);
   _display.setCursor(0, 18);
   _display.println(msg);
+  _display.display();
+}
+
+// ── NOVO: exibe insight do Qwen no OLED ───────────────────────────────────
+void DisplayEngine::showInsight(const char* linha1, const char* linha2) {
+  _display.clearDisplay();
+  _header("SOPHIA oo INSIGHT");
+  _display.setTextSize(1);
+  _display.setTextWrap(true);   // wrap para textos longos
+
+  _display.setCursor(0, 16);
+  _display.println(linha1);
+
+  if (linha2 && strlen(linha2) > 0) {
+    _display.setCursor(0, 40);
+    _display.println(linha2);
+  }
+
+  _display.setTextWrap(false);
   _display.display();
 }

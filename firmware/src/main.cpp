@@ -21,9 +21,8 @@
 #define JANELA_MS          50
 
 // ── MPU calibração ────────────────────────────────────────────────────────
-// Calibramos o offset de repouso nas primeiras amostras do boot
 #define CAL_AMOSTRAS  50
-float movOffset = 0.0f;   // valor médio em repouso — subtraído em todo loop
+float movOffset = 0.0f;
 
 // ── Objetos ───────────────────────────────────────────────────────────────
 Adafruit_MPU6050 mpu;
@@ -36,6 +35,69 @@ TelemetryEngine  telemetry;
 unsigned long ultimoLogAudio  = 0;
 unsigned long ultimoTelemetry = 0;
 unsigned long ultimoImpacto   = 0;
+
+// ── Comando Serial vindo do PC ────────────────────────────────────────────
+// Protocolo: CMD:<tipo>:<payload>\n
+// Exemplos:
+//   CMD:INSIGHT:Ambiente calmo|Sistema estavel
+//   CMD:OLED:ALERTA CRITICO
+//   CMD:STATE:ALERT
+String serialBuffer = "";
+
+void processarComando(const String& linha) {
+  if (!linha.startsWith("CMD:")) return;
+
+  // Parse: CMD:<tipo>:<payload>
+  int p1 = linha.indexOf(':', 4);
+  if (p1 < 0) return;
+
+  String tipo    = linha.substring(4, p1);
+  String payload = linha.substring(p1 + 1);
+  payload.trim();
+
+  Serial.print("[CMD] tipo=");
+  Serial.print(tipo);
+  Serial.print(" payload=");
+  Serial.println(payload);
+
+  if (tipo == "INSIGHT") {
+    // payload: "linha1|linha2"
+    int sep = payload.indexOf('|');
+    if (sep >= 0) {
+      String l1 = payload.substring(0, sep);
+      String l2 = payload.substring(sep + 1);
+      display.showInsight(l1.c_str(), l2.c_str());
+    } else {
+      display.showInsight(payload.c_str());
+    }
+    delay(4000);  // mostra por 4s depois volta ao estado normal
+    display.showState(stateEngine.getStateName(), 0.0f);
+
+  } else if (tipo == "OLED") {
+    // payload: mensagem direta
+    display.showInsight(payload.c_str());
+    delay(3000);
+    display.showState(stateEngine.getStateName(), 0.0f);
+
+  } else if (tipo == "PING") {
+    Serial.println("[ACK] PONG");
+  }
+}
+
+void lerComandosSerial() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n') {
+      serialBuffer.trim();
+      if (serialBuffer.length() > 0) {
+        processarComando(serialBuffer);
+      }
+      serialBuffer = "";
+    } else {
+      serialBuffer += c;
+    }
+  }
+}
 
 // ── Piezo helpers ─────────────────────────────────────────────────────────
 int lerPiezo() {
@@ -72,7 +134,7 @@ float lerPiezoNormalizado() {
   return 0.0f;
 }
 
-// ── Leitura MPU com offset removido ──────────────────────────────────────
+// ── MPU calibrado ─────────────────────────────────────────────────────────
 float lerMovimento() {
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
@@ -85,7 +147,6 @@ float lerMovimento() {
   return corrigido < 0.0f ? 0.0f : corrigido;
 }
 
-// ── Calibração MPU no boot ────────────────────────────────────────────────
 void calibrarMPU() {
   Serial.print("[CAL] Calibrando MPU6050 (mantenha parado)");
   float soma = 0.0f;
@@ -102,7 +163,7 @@ void calibrarMPU() {
   }
   movOffset = soma / CAL_AMOSTRAS;
   Serial.println();
-  Serial.print("[CAL] Offset: ");
+  Serial.print("[CAL] Offset MPU: ");
   Serial.println(movOffset, 4);
 }
 
@@ -137,24 +198,25 @@ void setup() {
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
   Serial.println("OK");
 
-  calibrarMPU();  // zera o ruído de repouso
+  calibrarMPU();
 
   Serial.print("[AUDIO]  INMP441... ");
   audio.begin() ? Serial.println("OK") : Serial.println("ERRO!");
   Serial.print("[AUDIO]  Calibrando noise floor");
-while (!audio.isCalibrado()) {
-  audio.read();
-  Serial.print(".");
-  delay(50);
-}
-Serial.println();
-Serial.print("[AUDIO]  Noise floor: ");
-Serial.println(audio.getNoiseFloor(), 1);
+  while (!audio.isCalibrado()) {
+    audio.read();
+    Serial.print(".");
+    delay(50);
+  }
+  Serial.println();
+  Serial.print("[AUDIO]  Noise floor: ");
+  Serial.println(audio.getNoiseFloor(), 1);
 
   telemetry.begin();
 
   Serial.println("================================");
   Serial.println("[SOPHIA] Sistema nervoso ativo!");
+  Serial.println("[CMD]    Aguardando comandos PC");
   Serial.println("[STATE]  IDLE");
   Serial.println("================================");
   display.showState("IDLE", 0.0f);
@@ -162,11 +224,14 @@ Serial.println(audio.getNoiseFloor(), 1);
 
 // ── Loop ──────────────────────────────────────────────────────────────────
 void loop() {
+  // Comandos do PC têm prioridade máxima
+  lerComandosSerial();
+
   audio.read();
   float audioIntensidade = audio.getIntensidade();
   bool  audioAtivo       = audio.isAtivo();
 
-  float movIntensidade   = lerMovimento();   // com offset removido
+  float movIntensidade   = lerMovimento();
   float piezoIntensidade = lerPiezoNormalizado();
 
   if (piezoIntensidade > 0.0f) {

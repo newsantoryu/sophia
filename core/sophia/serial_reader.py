@@ -1,6 +1,6 @@
 """
-SOPHIA ∞ — Serial Reader v0.2
-Lê ESP32 via USB Serial com reconexão automática e gestão de sessões.
+SOPHIA ∞ — Serial Reader v0.3
+Bidirecional: lê eventos do ESP32 e envia comandos de volta.
 """
 
 import serial
@@ -12,11 +12,12 @@ from .parser import parse_line, ParsedLine, LineType
 from .database import (insert_event, insert_telemetry, insert_state,
                        insert_event_v2, insert_telemetry_v2)
 from .sessions import SessionEngine
+from .command_sender import CommandSender
 
-BAUD_RATE   = 115200
-TIMEOUT_S   = 3.0
-RECONNECT_S = 5.0
-WATCHDOG_S  = 30.0
+BAUD_RATE       = 115200
+TIMEOUT_S       = 3.0
+RECONNECT_S     = 5.0
+WATCHDOG_S      = 30.0
 SEV_MIN_DISPLAY = 0.25
 
 
@@ -43,11 +44,14 @@ class SerialReader:
         self._ser: Optional[serial.Serial] = None
         self._last_rx  = time.time()
         self._thread: Optional[threading.Thread] = None
+        self._lock     = threading.Lock()
         self.session   = SessionEngine()
+        self.cmd: Optional[CommandSender] = None  # disponível após conexão
 
         self.stats = {
             "events": 0, "telemetry": 0, "states": 0,
             "errors": 0, "reconnects": 0, "sessions": 0,
+            "commands_sent": 0,
         }
 
     def start(self):
@@ -64,20 +68,36 @@ class SerialReader:
             self._ser.close()
         print("[SERIAL] Encerrado.")
 
-    def wait(self):
-        if self._thread:
-            self._thread.join()
+    def send_insight(self, insight) -> bool:
+        """Envia insight do Qwen para o OLED do ESP32."""
+        if self.cmd:
+            ok = self.cmd.send_insight(insight)
+            if ok:
+                self.stats["commands_sent"] += 1
+                print(f"[CMD] Insight enviado ao OLED: [{insight.oled_msg}]")
+            return ok
+        return False
+
+    def send_oled(self, msg: str) -> bool:
+        if self.cmd:
+            ok = self.cmd.send_oled(msg)
+            if ok:
+                self.stats["commands_sent"] += 1
+            return ok
+        return False
 
     def _connect(self) -> bool:
         try:
             if self._ser and self._ser.is_open:
                 self._ser.close()
             self._ser = serial.Serial(self.port, BAUD_RATE, timeout=TIMEOUT_S)
+            self.cmd   = CommandSender(self._ser)
             self._last_rx = time.time()
             print(f"[SERIAL] Conectado a {self.port}")
             return True
         except serial.SerialException as e:
             print(f"[SERIAL] Falha ao conectar: {e}")
+            self.cmd = None
             return False
 
     def _loop(self):
@@ -89,7 +109,7 @@ class SerialReader:
             try:
                 while self._running:
                     if time.time() - self._last_rx > WATCHDOG_S:
-                        print("[SERIAL] Watchdog: sem dados — reconectando")
+                        print("[SERIAL] Watchdog — reconectando")
                         self.stats["reconnects"] += 1
                         break
                     raw = self._ser.readline()
@@ -103,6 +123,7 @@ class SerialReader:
                     self._dispatch(line)
             except serial.SerialException as e:
                 print(f"[SERIAL] Conexão perdida: {e}")
+                self.cmd = None
                 self.stats["reconnects"] += 1
                 time.sleep(RECONNECT_S)
 
@@ -129,7 +150,6 @@ class SerialReader:
             self.stats["telemetry"] += 1
             uptime = parsed.data.get("uptime", 0)
 
-            # Detecta nova sessão pelo uptime
             if self.session.process_telemetry(uptime):
                 self.stats["sessions"] += 1
                 sid = self.session.session_id
