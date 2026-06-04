@@ -271,7 +271,7 @@ class ObserverEngine:
         # Sugestão
         sugestoes = {
             "CRITICO":  "Ambiente com agitação crítica. Considere pausar atividades.",
-            "ALTO":     "Nível de atividade elevado. Atenção ao contexto ao redor.",
+            "ALTO":     "Nível de atividade elevado. Alerta ao contexto ao redor.",
             "MODERADO": "Atividade moderada. Sistema operando normalmente.",
             "BAIXO":    "Ambiente calmo. Sistema em estado estável.",
         }

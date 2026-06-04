@@ -23,6 +23,7 @@ from sophia.serial_reader import SerialReader, list_ports
 from sophia.observer    import ObserverEngine, snapshot_to_prompt
 from sophia.qwen_bridge import QwenBridge
 from sophia.sessions import init_sessions_db
+from sophia.firmware_engine import FirmwareEngine, print_firmware
 from sophia.parser      import ParsedLine
 
 
@@ -142,6 +143,10 @@ def main():
     ap.add_argument("--query",    action="store_true", help="Últimos eventos")
     ap.add_argument("--observe",  action="store_true", help="Snapshot Observer")
     ap.add_argument("--no-qwen",  action="store_true", help="Sem IA local")
+    ap.add_argument("--gerar",    type=str, metavar="PEDIDO",
+                    help="Gera firmware ESP32 a partir de descrição natural")
+    ap.add_argument("--listar-fw", dest="listar_fw", action="store_true",
+                    help="Lista firmwares gerados")
     ap.add_argument("--ciclo",    type=int, default=60,
                     help="Intervalo do ciclo cognitivo em segundos (default: 60)")
     args = ap.parse_args()
@@ -152,6 +157,30 @@ def main():
 
     if args.list:
         for p in list_ports(): print(f"  {p}")
+        return
+
+    if args.gerar:
+        fw_engine = FirmwareEngine()
+        fw = fw_engine.generate(args.gerar)
+        print_firmware(fw)
+        if fw.valido:
+            # Salva arquivos localmente
+            from pathlib import Path
+            out = Path("firmware_gerado") / fw.nome
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "main.cpp").write_text(fw.main_cpp)
+            (out / "platformio.ini").write_text(fw.platformio_ini)
+            print(f"\n[FW] Arquivos salvos em: {out}/")
+        return
+
+    if args.listar_fw:
+        fw_engine = FirmwareEngine()
+        firmwares = fw_engine.list_firmwares()
+        print("\n── Firmwares gerados ───────────────────────────────")
+        for f in firmwares:
+            status = "✅" if f["valido"] else "❌"
+            print(f"  #{f['id']} {status} {f['nome']:30s} {f['gerado_em'][:19]}")
+            print(f"       {f['descricao']}")
         return
 
     if args.query:
