@@ -7,6 +7,7 @@
 #include "DisplayEngine.h"
 #include "AudioEngine.h"
 #include "TelemetryEngine.h"
+#include <Adafruit_BMP085.h>
 
 // ── Pinos ─────────────────────────────────────────────────────────────────
 #define SDA_PIN   32
@@ -31,6 +32,8 @@ EventEngine      eventEngine(stateEngine);
 DisplayEngine    display;
 AudioEngine      audio;
 TelemetryEngine  telemetry;
+Adafruit_BMP085 bmp;
+bool bmpDisponivel = false;
 
 unsigned long ultimoLogAudio  = 0;
 unsigned long ultimoTelemetry = 0;
@@ -134,6 +137,20 @@ float lerPiezoNormalizado() {
   return 0.0f;
 }
 
+// ── BMP  ─────────────────────────────────────────────────────────
+void readBMP(float &temp, float &press, float &alt) {
+  if (!bmpDisponivel) {
+    temp = 0;
+    press = 0;
+    alt = 0;
+    return;
+  }
+
+  temp = bmp.readTemperature();
+  press = bmp.readPressure() / 100.0f;
+  alt = bmp.readAltitude();
+}
+
 // ── MPU calibrado ─────────────────────────────────────────────────────────
 float lerMovimento() {
   sensors_event_t a, g, temp;
@@ -177,6 +194,7 @@ void setup() {
   Serial.println("================================");
 
   Wire.begin(21, 22);
+  Wire.setClock(100000);
   Serial.print("[DISPLAY] OLED... ");
   display.begin() ? Serial.println("OK") : Serial.println("ERRO!");
   display.showBoot();
@@ -185,6 +203,16 @@ void setup() {
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
   Serial.println("[PIEZO]  GPIO 35 OK");
+
+Serial.print("[BMP] init... ");
+
+bmpDisponivel = bmp.begin(BMP085_STANDARD, &Wire);
+
+if (bmpDisponivel) {
+  Serial.println("OK");
+} else {
+  Serial.println("OFFLINE");
+}
 
   Wire1.begin(SDA_PIN, SCL_PIN);
   Serial.print("[SENSOR] MPU6050... ");
@@ -239,6 +267,19 @@ void loop() {
     Serial.print(piezoIntensidade, 3);
     Serial.println(piezoIntensidade > 0.7f ? " FORTE" : " LEVE");
   }
+  float temp, press, alt;
+readBMP(temp, press, alt);
+
+
+float envFactor = 0.0f;
+
+if (bmpDisponivel) {
+  // pressão influencia “stress do ambiente”
+  envFactor += (press - 1000.0f) * 0.001f;
+
+  // temperatura influencia conforto
+  envFactor += (25.0f - temp) * 0.02f;
+}
 
   float intensidade = max(movIntensidade, audioIntensidade * 10.0f);
   stateEngine.update(intensidade);
@@ -255,6 +296,17 @@ void loop() {
     Serial.print(" | state: ");
     Serial.println(stateEngine.getStateName());
     ultimoLogAudio = agora;
+
+    if (bmpDisponivel) {
+  Serial.print(" | BMP temp=");
+  Serial.print(temp);
+
+  Serial.print(" press=");
+  Serial.print(press);
+
+  Serial.print(" env=");
+  Serial.print(envFactor);
+}
   }
 
   if (agora - ultimoTelemetry > 10000) {

@@ -2,34 +2,37 @@
 
 EventEngine::EventEngine(StateEngine& stateEngine)
   : _state(stateEngine) {
-  _last = { EVENT_NONE, 0.0f, "IDLE", 0, 0.0f, 0.0f, 0.0f };
+  _last = { EVENT_NONE, 0.0f, "IDLE", 0, 0.0f, 0.0f, 0.0f, 0.0f };
 }
 
-bool EventEngine::process(float movIntensidade, float audioIntensidade,
-                          bool audioAtivo, float piezoIntensidade) {
+bool EventEngine::process(float movIntensidade,
+                          float audioIntensidade,
+                          bool audioAtivo,
+                          float piezoIntensidade,
+                          float bmpTemp){
   bool gerou = false;
   unsigned long agora = millis();
 
   float intensidade = max(movIntensidade, audioIntensidade * 10.0f);
 
-  // ── Piezo tem prioridade máxima — impacto físico direto ────────────────
-  // piezoIntensidade já vem normalizado 0.0–1.0
-  // forte: >0.7  |  leve: >0.2
+  // ── IMPACTO FORTE ───────────────────────────────────────────────
   if (piezoIntensidade > 0.7f) {
     _last = {
       EVENT_IMPACT_STRONG,
-      piezoIntensidade,
+      piezoIntensidade, 
       _state.getStateName(),
       agora,
       audioIntensidade,
       movIntensidade,
-      piezoIntensidade
+      piezoIntensidade,
+      bmpTemp
     };
-    // Impacto forte também alimenta o StateEngine com intensidade alta
+
     _state.update(piezoIntensidade * 15.0f);
     return true;
   }
 
+  // ── IMPACTO NORMAL ──────────────────────────────────────────────
   if (piezoIntensidade > 0.2f) {
     _last = {
       EVENT_IMPACT,
@@ -38,32 +41,86 @@ bool EventEngine::process(float movIntensidade, float audioIntensidade,
       agora,
       audioIntensidade,
       movIntensidade,
-      piezoIntensidade
+      piezoIntensidade,
+      bmpTemp
     };
+
     _state.update(piezoIntensidade * 8.0f);
     return true;
   }
 
-  // ── Fluxo normal (mov + audio) ─────────────────────────────────────────
+  // ── STATE CHANGE ────────────────────────────────────────────────
   if (_state.mudou()) {
-    _last = { EVENT_STATE_CHANGED, _normalize(intensidade, 15.0f),
-              _state.getStateName(), agora, audioIntensidade, movIntensidade, 0.0f };
+    _last = {
+      EVENT_STATE_CHANGED,
+      _normalize(intensidade, 15.0f),
+      _state.getStateName(),
+      agora,
+      audioIntensidade,
+      movIntensidade,
+      0.0f,
+      bmpTemp
+    };
     gerou = true;
-  } else if (intensidade >= 7.0f) {
-    _last = { EVENT_ALERT_TRIGGERED, _normalize(intensidade, 15.0f),
-              _state.getStateName(), agora, audioIntensidade, movIntensidade, 0.0f };
+  }
+
+  // ── ALERTA ──────────────────────────────────────────────────────
+  else if (intensidade >= 7.0f) {
+    _last = {
+      EVENT_ALERT_TRIGGERED,
+      _normalize(intensidade, 15.0f),
+      _state.getStateName(),
+      agora,
+      audioIntensidade,
+      movIntensidade,
+      0.0f,
+      bmpTemp
+    };
     gerou = true;
-  } else if (intensidade >= 4.0f) {
-    _last = { EVENT_MOVEMENT_SPIKE, _normalize(intensidade, 15.0f),
-              _state.getStateName(), agora, audioIntensidade, movIntensidade, 0.0f };
+  }
+
+  // ── SPIKE ───────────────────────────────────────────────────────
+  else if (intensidade >= 4.0f) {
+    _last = {
+      EVENT_MOVEMENT_SPIKE,
+      _normalize(intensidade, 15.0f),
+      _state.getStateName(),
+      agora,
+      audioIntensidade,
+      movIntensidade,
+      0.0f,
+      bmpTemp
+    };
     gerou = true;
-  } else if (intensidade >= 2.5f) {
-    _last = { EVENT_MOVEMENT_GENTLE, _normalize(intensidade, 15.0f),
-              _state.getStateName(), agora, audioIntensidade, movIntensidade, 0.0f };
+  }
+
+  // ── GENTLE ──────────────────────────────────────────────────────
+  else if (intensidade >= 2.5f) {
+    _last = {
+      EVENT_MOVEMENT_GENTLE,
+      _normalize(intensidade, 15.0f),
+      _state.getStateName(),
+      agora,
+      audioIntensidade,
+      movIntensidade,
+      0.0f,
+      bmpTemp
+    };
     gerou = true;
-  } else if (audioAtivo) {
-    _last = { EVENT_AUDIO_ACTIVE, audioIntensidade,
-              _state.getStateName(), agora, audioIntensidade, movIntensidade, 0.0f };
+  }
+
+  // ── AUDIO ONLY ───────────────────────────────────────────────────
+  else if (audioAtivo) {
+    _last = {
+      EVENT_AUDIO_ACTIVE,
+      audioIntensidade,
+      _state.getStateName(),
+      agora,
+      audioIntensidade,
+      movIntensidade,
+      0.0f,
+      bmpTemp
+    };
     gerou = true;
   }
 
@@ -94,6 +151,7 @@ String EventEngine::toJson() {
   doc["audio"]     = _last.audioIntensidade;
   doc["mov"]       = _last.movIntensidade;
   doc["piezo"]     = _last.piezoIntensidade;
+  doc["temp"]      = _last.bmpTemp;
 
   String output;
   serializeJson(doc, output);

@@ -10,8 +10,8 @@ enum EventType {
   EVENT_STATE_CHANGED,
   EVENT_ALERT_TRIGGERED,
   EVENT_AUDIO_ACTIVE,
-  EVENT_IMPACT,        // impacto piezo leve/médio
-  EVENT_IMPACT_STRONG  // impacto piezo forte
+  EVENT_IMPACT,
+  EVENT_IMPACT_STRONG
 };
 
 struct SophiaEvent {
@@ -22,15 +22,18 @@ struct SophiaEvent {
   float         audioIntensidade;
   float         movIntensidade;
   float         piezoIntensidade;  // 0.0–1.0 normalizado
+  float         bmpTemp;
 };
 
 class EventEngine {
 public:
   EventEngine(StateEngine& stateEngine);
 
-  // piezoIntensidade: valor ADC normalizado 0.0–1.0 (passe 0 se sem piezo)
-  bool process(float movIntensidade, float audioIntensidade, bool audioAtivo,
-               float piezoIntensidade = 0.0f);
+  bool process(float movIntensidade,
+               float audioIntensidade,
+               bool audioAtivo,
+               float piezoIntensidade = 0.0f,
+               float bmpTemp = 0.0f);
 
   SophiaEvent getLast();
   String toJson();
