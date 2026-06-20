@@ -39,6 +39,17 @@ unsigned long ultimoLogAudio  = 0;
 unsigned long ultimoTelemetry = 0;
 unsigned long ultimoImpacto   = 0;
 
+float g_temp = 0.0f;
+float g_press = 0.0f;
+float g_alt = 0.0f;
+
+bool displayLockedByEvent = false;
+
+unsigned long lastOledUpdate = 0;
+float lastTempShown = -100.0f;
+
+bool oledBusy = false;
+String lastState = "";
 // ── Comando Serial vindo do PC ────────────────────────────────────────────
 // Protocolo: CMD:<tipo>:<payload>\n
 // Exemplos:
@@ -100,6 +111,23 @@ void lerComandosSerial() {
       serialBuffer += c;
     }
   }
+}
+
+void updateOledIdle(float temp) {
+    if (oledBusy) return;
+
+    if (millis() - lastOledUpdate < 1000) return;
+
+    if (fabs(temp - lastTempShown) < 0.2f) return;
+
+    lastOledUpdate = millis();
+    lastTempShown = temp;
+
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer),
+             "IDLE %.1fC", temp);
+
+    display.showState(buffer, 0.0f);
 }
 
 // ── Piezo helpers ─────────────────────────────────────────────────────────
@@ -249,7 +277,20 @@ if (bmpDisponivel) {
   Serial.println("================================");
   display.showState("IDLE", 0.0f);
 }
+void handleStateDisplay(String currentState, float temp) {
 
+    if (currentState != lastState) {
+        lastState = currentState;
+
+        // força redraw ao mudar estado
+        lastTempShown = -999;
+        lastOledUpdate = 0;
+    }
+
+    if (currentState == "IDLE") {
+        updateOledIdle(temp);
+    }
+}
 // ── Loop ──────────────────────────────────────────────────────────────────
 void loop() {
   // Comandos do PC têm prioridade máxima
@@ -268,7 +309,6 @@ void loop() {
     Serial.println(piezoIntensidade > 0.7f ? " FORTE" : " LEVE");
   }
   float temp, press, alt;
-readBMP(temp, press, alt);
 
 
 float envFactor = 0.0f;
@@ -316,18 +356,23 @@ if (bmpDisponivel) {
     ultimoTelemetry = agora;
   }
 
-  if (eventEngine.process(movIntensidade, audioIntensidade, audioAtivo, piezoIntensidade)) {
-    String json = eventEngine.toJson();
-    Serial.print("[EVENT]  ");
-    Serial.println(json);
+if (eventEngine.process(movIntensidade, audioIntensidade, audioAtivo, piezoIntensidade)) {
+
+    oledBusy = true;
 
     SophiaEvent ev = eventEngine.getLast();
+
     display.showState(stateEngine.getStateName(), ev.severity);
 
     if (ev.type == EVENT_STATE_CHANGED || ev.type == EVENT_IMPACT_STRONG) {
-      display.showEvent(stateEngine.getStateName());
-      delay(800);
-      display.showState(stateEngine.getStateName(), ev.severity);
+        display.showEvent(stateEngine.getStateName());
+        display.showState(stateEngine.getStateName(), ev.severity);
     }
-  }
+
+    lastOledUpdate = millis() + 800; // bloqueia refresh por um tempo
+    oledBusy = false;
+} 
+readBMP(g_temp, g_press, g_alt);
+handleStateDisplay(stateEngine.getStateName(), g_temp);
+
 }
