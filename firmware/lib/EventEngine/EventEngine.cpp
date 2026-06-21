@@ -2,52 +2,18 @@
 
 EventEngine::EventEngine(StateEngine& stateEngine)
   : _state(stateEngine) {
-  _last = { EVENT_NONE, 0.0f, "IDLE", 0, 0.0f, 0.0f, 0.0f, 0.0f };
+  _last = { EVENT_NONE, 0.0f, "IDLE", 0, 0.0f, 0.0f, 0.0f };
 }
 
 bool EventEngine::process(float movIntensidade,
                           float audioIntensidade,
                           bool audioAtivo,
-                          float piezoIntensidade,
                           float bmpTemp){
   bool gerou = false;
   unsigned long agora = millis();
 
   float intensidade = max(movIntensidade, audioIntensidade * 10.0f);
 
-  // ── IMPACTO FORTE ───────────────────────────────────────────────
-  if (piezoIntensidade > 0.7f) {
-    _last = {
-      EVENT_IMPACT_STRONG,
-      piezoIntensidade, 
-      _state.getStateName(),
-      agora,
-      audioIntensidade,
-      movIntensidade,
-      piezoIntensidade,
-      bmpTemp
-    };
-
-    _state.update(piezoIntensidade * 15.0f);
-    return true;
-  }
-
-  // ── IMPACTO NORMAL ──────────────────────────────────────────────
-  if (piezoIntensidade > 0.2f) {
-    _last = {
-      EVENT_IMPACT,
-      piezoIntensidade,
-      _state.getStateName(),
-      agora,
-      audioIntensidade,
-      movIntensidade,
-      piezoIntensidade,
-      bmpTemp
-    };
-
-    _state.update(piezoIntensidade * 8.0f);
-    return true;
-  }
 
   // ── STATE CHANGE ────────────────────────────────────────────────
   if (_state.mudou()) {
@@ -58,7 +24,6 @@ bool EventEngine::process(float movIntensidade,
       agora,
       audioIntensidade,
       movIntensidade,
-      0.0f,
       bmpTemp
     };
     gerou = true;
@@ -73,7 +38,6 @@ bool EventEngine::process(float movIntensidade,
       agora,
       audioIntensidade,
       movIntensidade,
-      0.0f,
       bmpTemp
     };
     gerou = true;
@@ -88,7 +52,6 @@ bool EventEngine::process(float movIntensidade,
       agora,
       audioIntensidade,
       movIntensidade,
-      0.0f,
       bmpTemp
     };
     gerou = true;
@@ -103,7 +66,6 @@ bool EventEngine::process(float movIntensidade,
       agora,
       audioIntensidade,
       movIntensidade,
-      0.0f,
       bmpTemp
     };
     gerou = true;
@@ -118,7 +80,6 @@ bool EventEngine::process(float movIntensidade,
       agora,
       audioIntensidade,
       movIntensidade,
-      0.0f,
       bmpTemp
     };
     gerou = true;
@@ -140,8 +101,6 @@ String EventEngine::toJson() {
     case EVENT_STATE_CHANGED:    doc["event"] = "STATE_CHANGED";    break;
     case EVENT_ALERT_TRIGGERED:  doc["event"] = "ALERT_TRIGGERED";  break;
     case EVENT_AUDIO_ACTIVE:     doc["event"] = "AUDIO_ACTIVE";     break;
-    case EVENT_IMPACT:           doc["event"] = "IMPACT";           break;
-    case EVENT_IMPACT_STRONG:    doc["event"] = "IMPACT_STRONG";    break;
     default:                     doc["event"] = "NONE";             break;
   }
 
@@ -150,7 +109,6 @@ String EventEngine::toJson() {
   doc["timestamp"] = _last.timestamp;
   doc["audio"]     = _last.audioIntensidade;
   doc["mov"]       = _last.movIntensidade;
-  doc["piezo"]     = _last.piezoIntensidade;
   doc["temp"]      = _last.bmpTemp;
 
   String output;

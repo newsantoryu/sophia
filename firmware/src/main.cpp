@@ -9,17 +9,9 @@
 #include "TelemetryEngine.h"
 #include <Adafruit_BMP085.h>
 
-// ── Pinos ─────────────────────────────────────────────────────────────────
-#define SDA_PIN   32
-#define SCL_PIN   33
-#define PIEZO_PIN 35
+//coração
+#define ECG_PIN   35   // ADC bom e livre
 
-// ── Piezo ─────────────────────────────────────────────────────────────────
-#define PIEZO_THRESHOLD  150
-#define PIEZO_MAX       4095.0f
-#define ANTI_SPAM_MS     200
-#define AMOSTRAS           8
-#define JANELA_MS          50
 
 // ── MPU calibração ────────────────────────────────────────────────────────
 #define CAL_AMOSTRAS  50
@@ -130,40 +122,6 @@ void updateOledIdle(float temp) {
     display.showState(buffer, 0.0f);
 }
 
-// ── Piezo helpers ─────────────────────────────────────────────────────────
-int lerPiezo() {
-  int soma = 0;
-  for (int i = 0; i < AMOSTRAS; i++) {
-    soma += analogRead(PIEZO_PIN);
-    delayMicroseconds(200);
-  }
-  return soma / AMOSTRAS;
-}
-
-int capturarPico() {
-  int pico = 0;
-  unsigned long inicio = millis();
-  while (millis() - inicio < JANELA_MS) {
-    int v = lerPiezo();
-    if (v > pico) pico = v;
-    delayMicroseconds(500);
-  }
-  return pico;
-}
-
-float lerPiezoNormalizado() {
-  unsigned long agora = millis();
-  int leitura = lerPiezo();
-  if (leitura > PIEZO_THRESHOLD && agora - ultimoImpacto > ANTI_SPAM_MS) {
-    int pico = capturarPico();
-    if (pico > PIEZO_THRESHOLD) {
-      ultimoImpacto = agora;
-      float norm = (float)pico / PIEZO_MAX;
-      return norm > 1.0f ? 1.0f : norm;
-    }
-  }
-  return 0.0f;
-}
 
 // ── BMP  ─────────────────────────────────────────────────────────
 void readBMP(float &temp, float &press, float &alt) {
@@ -242,9 +200,8 @@ if (bmpDisponivel) {
   Serial.println("OFFLINE");
 }
 
-  Wire1.begin(SDA_PIN, SCL_PIN);
   Serial.print("[SENSOR] MPU6050... ");
-  if (!mpu.begin(0x68, &Wire1)) {
+  if (!mpu.begin(0x68)) {
     Serial.println("ERRO!");
     display.showError("MPU6050 falhou!");
     while (true) { delay(500); }
@@ -252,7 +209,6 @@ if (bmpDisponivel) {
   mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
   mpu.setGyroRange(MPU6050_RANGE_500_DEG);
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
-  Serial.println("OK");
 
   calibrarMPU();
 
@@ -301,13 +257,7 @@ void loop() {
   bool  audioAtivo       = audio.isAtivo();
 
   float movIntensidade   = lerMovimento();
-  float piezoIntensidade = lerPiezoNormalizado();
 
-  if (piezoIntensidade > 0.0f) {
-    Serial.print("[PIEZO]  impacto=");
-    Serial.print(piezoIntensidade, 3);
-    Serial.println(piezoIntensidade > 0.7f ? " FORTE" : " LEVE");
-  }
   float temp, press, alt;
 
 
@@ -356,7 +306,7 @@ if (bmpDisponivel) {
     ultimoTelemetry = agora;
   }
 
-if (eventEngine.process(movIntensidade, audioIntensidade, audioAtivo, piezoIntensidade)) {
+if (eventEngine.process(movIntensidade, audioIntensidade, audioAtivo)) {
 
     oledBusy = true;
 
@@ -364,7 +314,7 @@ if (eventEngine.process(movIntensidade, audioIntensidade, audioAtivo, piezoInten
 
     display.showState(stateEngine.getStateName(), ev.severity);
 
-    if (ev.type == EVENT_STATE_CHANGED || ev.type == EVENT_IMPACT_STRONG) {
+    if (ev.type == EVENT_STATE_CHANGED) {
         display.showEvent(stateEngine.getStateName());
         display.showState(stateEngine.getStateName(), ev.severity);
     }

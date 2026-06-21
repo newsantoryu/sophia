@@ -4,7 +4,7 @@
 
 #define I2S_WS   25
 #define I2S_SCK  26
-#define I2S_SD   34
+#define I2S_SD   32
 #define I2S_PORT I2S_NUM_0
 #define AUDIO_BUFFER_LEN 1024
 

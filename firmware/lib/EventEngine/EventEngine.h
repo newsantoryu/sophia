@@ -9,9 +9,7 @@ enum EventType {
   EVENT_MOVEMENT_GENTLE,
   EVENT_STATE_CHANGED,
   EVENT_ALERT_TRIGGERED,
-  EVENT_AUDIO_ACTIVE,
-  EVENT_IMPACT,
-  EVENT_IMPACT_STRONG
+  EVENT_AUDIO_ACTIVE
 };
 
 struct SophiaEvent {
@@ -21,7 +19,6 @@ struct SophiaEvent {
   unsigned long timestamp;
   float         audioIntensidade;
   float         movIntensidade;
-  float         piezoIntensidade;  // 0.0–1.0 normalizado
   float         bmpTemp;
 };
 
@@ -32,7 +29,6 @@ public:
   bool process(float movIntensidade,
                float audioIntensidade,
                bool audioAtivo,
-               float piezoIntensidade = 0.0f,
                float bmpTemp = 0.0f);
 
   SophiaEvent getLast();
