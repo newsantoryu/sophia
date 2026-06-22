@@ -10,7 +10,7 @@
 #include <Adafruit_BMP085.h>
 
 //coração
-#define ECG_PIN   35   // ADC bom e livre
+#define ECG_PIN   34   // ADC bom e livre
 
 
 // ── MPU calibração ────────────────────────────────────────────────────────
@@ -49,6 +49,11 @@ String lastState = "";
 //   CMD:OLED:ALERTA CRITICO
 //   CMD:STATE:ALERT
 String serialBuffer = "";
+
+
+float baseline = 0;
+float filteredECG = 0;
+
 
 void processarComando(const String& linha) {
   if (!linha.startsWith("CMD:")) return;
@@ -188,7 +193,18 @@ void setup() {
 
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
-  Serial.println("[PIEZO]  GPIO 35 OK");
+
+  long sum = 0;
+
+for(int i = 0; i < 500; i++) {
+    sum += analogRead(ECG_PIN);
+    delay(2);
+}
+
+baseline = sum / 500.0;
+
+Serial.print("Baseline ECG: ");
+Serial.println(baseline);
 
 Serial.print("[BMP] init... ");
 
@@ -251,6 +267,20 @@ void handleStateDisplay(String currentState, float temp) {
 void loop() {
   // Comandos do PC têm prioridade máxima
   lerComandosSerial();
+
+int raw = analogRead(ECG_PIN);
+
+// baseline adaptativo leve
+baseline = (baseline * 0.99) + (raw * 0.01);
+
+// remove offset
+float ecg = raw - baseline;
+
+// low pass
+filteredECG = (filteredECG * 0.95) + (ecg * 0.05);
+
+Serial.print("ECG: ");
+Serial.println(filteredECG);
 
   audio.read();
   float audioIntensidade = audio.getIntensidade();
